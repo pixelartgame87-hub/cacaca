@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motor Procedural - Isla Natal & Huerta (PIXELVERSE)</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #0a0a0a;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            color: #ffffff;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        .hud-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(10, 15, 25, 0.88);
+            padding: 16px 22px;
+            border-radius: 12px;
+            border: 1px solid rgba(94, 234, 212, 0.35);
+            backdrop-filter: blur(10px);
+            pointer-events: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            max-width: 400px;
+        }
+        .hud-title {
+            margin: 0 0 6px 0;
+            font-size: 16px;
+            font-weight: 700;
+            color: #5eead4;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .hud-subtitle {
+            margin: 0 0 10px 0;
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+        .hud-stats {
+            display: flex;
+            gap: 10px;
+            font-size: 11px;
+            color: #64748b;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            padding-top: 8px;
+        }
+        .hud-badge {
+            background: rgba(45, 212, 191, 0.15);
+            color: #2dd4bf;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="hud-container">
+        <div class="hud-title">PIXELVERSE // Suelo, Arbustos & Huerta</div>
+        <div class="hud-subtitle">Texturas de Piedras y Follaje integradas &bull; Arbustos Multi-tono &bull; Huerta de Cultivos Z-Sorted</div>
+        <div class="hud-stats">
+            <div>Árboles: <span id="treeCount" class="hud-badge">0</span></div>
+            <div>Arbustos: <span id="bushCount" class="hud-badge">0</span></div>
+            <div>FPS: <span id="fpsCount" class="hud-badge">60</span></div>
+        </div>
+    </div>
+
+    <canvas id="islaCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('islaCanvas');
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        
+        let ancho = window.innerWidth;
+        let alto = window.innerHeight;
+        canvas.width = ancho;
+        canvas.height = alto;
+
+        // --- CARGA DE TEXTURAS DE CÉSPED ---
+        const imgCespedBase = new Image();
+        imgCespedBase.src = '/assets/aistudio/imattges_94dbe96b.jpg';
+        const imgCespedDetalle = new Image();
+        imgCespedDetalle.src = '/assets/aistudio/imagesr_9a9d6db6.jpg';
+        const imgCespedTufts = new Image();
+        imgCespedTufts.src = '/assets/aistudio/imattges_94dbe96b.jpg';
+
+        let cespedBaseData = null;
+        let cespedDetalleData = null;
+        let cespedTuftsData = null;
+        let baseW = 0, baseH = 0;
+        let detailW = 0, detailH = 0;
+        let tuftsW = 0, tuftsH = 0;
+
+        function extraerPixeles(img) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
+            return {
+                data: tempCtx.getImageData(0, 0, img.width, img.height).data,
+                w: img.width,
+                h: img.height
+            };
+        }
+
+        imgCespedBase.onload = () => {
+            const res = extraerPixeles(imgCespedBase);
+            cespedBaseData = res.data;
+            baseW = res.w;
+            baseH = res.h;
+        };
+        imgCespedDetalle.onload = () => {
+            const res = extraerPixeles(imgCespedDetalle);
+            cespedDetalleData = res.data;
+            detailW = res.w;
+            detailH = res.h;
+        };
+        imgCespedTufts.onload = () => {
+            const res = extraerPixeles(imgCespedTufts);
+            cespedTuftsData = res.data;
+            tuftsW = res.w;
+            tuftsH = res.h;
+        };
+
+        // --- FUNCIONES MATEMÁTICAS PROCEDURALES ---
+        function hash(x, y) {
+            let n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453123;
+            return n - Math.floor(n);
+        }
+
+        function ruidoInterpolar(x, y) {
+            const ix = Math.floor(x);
+            const iy = Math.floor(y);
+            const fx = x - ix;
+            const fy = y - iy;
+
+            const u = fx * fx * (3 - 2 * fx);
+            const v = fy * fy * (3 - 2 * fy);
+
+            const v1 = hash(ix, iy);
+            const v2 = hash(ix + 1, iy);
+            const v3 = hash(ix, iy + 1);
+            const v4 = hash(ix + 1, iy + 1);
+
+            const i1 = v1 * (1 - u) + v2 * u;
+            const i2 = v3 * (1 - u) + v4 * u;
+            return i1 * (1 - v) + i2 * v;
+        }
+
+        function ruidoFractal(x, y, octavas = 5, persistencia = 0.5, lacunaridad = 2.0) {
+            let valor = 0;
+            let amplitud = 1;
+            let frecuencia = 1;
+            let maxValor = 0;
+
+            for (let i = 0; i < octavas; i++) {
+                valor += ruidoInterpolar(x * frecuencia, y * frecuencia) * amplitud;
+                maxValor += amplitud;
+                amplitud *= persistencia;
+                frecuencia *= lacunaridad;
+            }
+            return valor / maxValor;
+        }
+
+        function lerp(a, b, t) { return a + (b - a) * t; }
+        function smoothstep(min, max, value) {
+            let x = Math.max(0, Math.min(1, (value - min) / (max - min)));
+            return x * x * (3 - 2 * x);
+        }
+
+        let centroX = ancho / 2;
+        let centroY = alto / 2;
+        let radioMaximo = Math.min(ancho, alto) * 0.44;
+        let escalaRuido = 0.004;
+
+        let arbolesValidos = [];
+        let arbustosValidos = [];
+        let piedrasSuelo = [];
+        let floraGenerada = false;
+
+        // Posición y dimensiones de La Huerta Central (reemplaza la roca central)
+        let huerta = {
+            x: centroX - 130,
+            y: centroY - 80,
+            w: 260,
+            h: 160
+        };
+
+        // Entidad del jugador
+        let jugador = {
+            x: centroX - 80,
+            y: centroY + 80,
+            velocidad: 90
+        };
+
+        let teclas = {};
+        window.addEventListener('keydown', (e) => { teclas[e.key] = true; });
+        window.addEventListener('keyup', (e) => { teclas[e.key] = false; });
+
+        function actualizarJugador(dt, t) {
+            let dx = 0, dy = 0;
+            if (teclas['ArrowUp'] || teclas['w'] || teclas['W']) dy -= 1;
+            if (teclas['ArrowDown'] || teclas['s'] || teclas['S']) dy += 1;
+            if (teclas['ArrowLeft'] || teclas['a'] || teclas['A']) dx -= 1;
+            if (teclas['ArrowRight'] || teclas['d'] || teclas['D']) dx += 1;
+
+            if (dx !== 0 || dy !== 0) {
+                let len = Math.sqrt(dx * dx + dy * dy);
+                jugador.x += (dx / len) * jugador.velocidad * dt;
+                jugador.y += (dy / len) * jugador.velocidad * dt;
+            } else {
+                // Exploración continua por la isla y huerta
+                jugador.x = centroX - 40 + Math.cos(t * 0.4) * 150;
+                jugador.y = centroY + 40 + Math.sin(t * 0.7) * 110;
+            }
+
+            jugador.x = Math.max(50, Math.min(ancho - 50, jugador.x));
+            jugador.y = Math.max(50, Math.min(alto - 50, jugador.y));
+        }
+
+        // GENERACIÓN DE ELEMENTOS VEGETALES Y DECORATIVOS (ÁRBOLES, ARBUSTOS, PIEDRAS DE SUELO)
+        function generarFloraYObjetos() {
+            arbolesValidos = [];
+            arbustosValidos = [];
+            piedrasSuelo = [];
+            let candidatos = [];
+            let pasoGrid = 38;
+
+            for (let y = 50; y < alto - 50; y += pasoGrid) {
+                for (let x = 50; x < ancho - 50; x += pasoGrid) {
+                    let rx = x + (hash(x, y) - 0.5) * 18;
+                    let ry = y + (hash(y, x) - 0.5) * 18;
+
+                    // Evitar colocar árboles/arbustos dentro de la huerta
+                    if (rx >= huerta.x - 20 && rx <= huerta.x + huerta.w + 20 &&
+                        ry >= huerta.y - 20 && ry <= huerta.y + huerta.h + 20) {
+                        continue;
+                    }
+
+                    const distX = (rx - centroX) / (radioMaximo * 1.1);
+                    const distY = (ry - centroY) / (radioMaximo * 1.1);
+                    const distancia = Math.sqrt(distX * distX + distY * distY);
+                    
+                    const gradienteCircular = 1.0 - Math.min(distancia, 1.0);
+                    const topografia = ruidoFractal(rx * escalaRuido, ry * escalaRuido, 4);
+                    const elevacion = gradienteCircular * 0.65 + topografia * 0.45;
+
+                    if (elevacion >= 0.48 && elevacion <= 0.74) {
+                        let randVal = hash(rx * 3, ry * 7);
+
+                        // Palmeras (Umbral disperso)
+                        if (randVal > 0.72) {
+                            candidatos.push({
+                                tipo: 'arbol',
+                                x: rx,
+                                y: ry,
+                                variante: 2, // Siempre Palmera
+                                escala: 0.9 + hash(rx, ry) * 0.4
+                            });
+                        }
+                        // Arbustos variados (Inspirados en fac8de95b98a3c115a31ee193d3ee697.jpg)
+                        else if (randVal > 0.45) {
+                            // 6 variantes: Frondoso Verde, Cónico Verde, Olivo Frondoso, Olivo Cónico, Púrpura Frondoso, Púrpura Cónico
+                            const varianteArbusto = Math.floor(hash(rx * 5, ry * 9) * 6);
+                            arbustosValidos.push({
+                                x: rx,
+                                y: ry,
+                                variante: varianteArbusto,
+                                escala: 0.75 + hash(ry, rx) * 0.35
+                            });
+                        }
+                        // Piedras pequeñas de suelo (Inspiradas en imattges.jpg)
+                        else if (randVal > 0.30) {
+                            piedrasSuelo.push({
+                                x: rx,
+                                y: ry,
+                                radioX: 3 + hash(rx, ry) * 4,
+                                radioY: 2 + hash(ry, rx) * 2.5
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Anti-superposición para árboles
+            for (let i = 0; i < candidatos.length; i++) {
+                let cand = candidatos[i];
+                let solapado = false;
+                for (let j = 0; j < arbolesValidos.length; j++) {
+                    let ex = arbolesValidos[j];
+                    let dX = cand.x - ex.x;
+                    let dY = cand.y - ex.y;
+                    if (Math.sqrt(dX * dX + dY * dY) < 55) { solapado = true; break; }
+                }
+                if (!solapado) arbolesValidos.push(cand);
+            }
+
+            arbolesValidos.sort((a, b) => a.y - b.y);
+            arbustosValidos.sort((a, b) => a.y - b.y);
+            generarDetallesSuelo();
+            floraGenerada = true;
+
+            const treeEl = document.getElementById('treeCount');
+            const bushEl = document.getElementById('bushCount');
+            if (treeEl) treeEl.innerText = arbolesValidos.length;
+            if (bushEl) bushEl.innerText = arbustosValidos.length;
+        }
+
+        window.addEventListener('resize', () => {
+            ancho = window.innerWidth;
+            alto = window.innerHeight;
+            canvas.width = ancho;
+            canvas.height = alto;
+            centroX = ancho / 2;
+            centroY = alto / 2;
+            radioMaximo = Math.min(ancho, alto) * 0.44;
+            huerta.x = centroX - 130;
+            huerta.y = centroY - 80;
+            floraGenerada = false;
+            generarFloraYObjetos();
+        });
+
+        // Estructura de datos para canteros de la Huerta
+        interface GardenBed {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            cropType: 'tomate' | 'zanahoria' | 'repollo' | 'maiz' | 'berenjena' | 'baya';
+            growthStage: 0 | 1 | 2; // 0: Tierra arada, 1: Brote, 2: Cosechable
+        }
+
+        let canterosHuerta: GardenBed[] = [
+            { x: centroX - 110, y: centroY - 60, width: 60, height: 40, cropType: 'tomate', growthStage: 2 },
+            { x: centroX - 30, y: centroY - 60, width: 60, height: 40, cropType: 'zanahoria', growthStage: 1 },
+            { x: centroX + 50, y: centroY - 60, width: 60, height: 40, cropType: 'repollo', growthStage: 2 },
+            { x: centroX - 110, y: centroY, width: 60, height: 40, cropType: 'maiz', growthStage: 1 },
+            { x: centroX - 30, y: centroY, width: 60, height: 40, cropType: 'berenjena', growthStage: 2 },
+            { x: centroX + 50, y: centroY, width: 60, height: 40, cropType: 'baya', growthStage: 2 }
+        ];
+
+        // --- RENDERIZADO DE LA HUERTA CENTRAL DE CULTIVOS ---
+        function dibujarHuerta() {
+            canterosHuerta.forEach(bed => {
+                // 1. Sombra de oclusión ambiental bajo el cantero
+                ctx.fillStyle = 'rgba(8, 28, 14, 0.40)';
+                ctx.beginPath();
+                ctx.ellipse(bed.x + bed.width/2, bed.y + bed.height/2 + 4, bed.width/2 + 8, bed.height/2 + 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 2. Tierra arada (base)
+                ctx.fillStyle = bed.growthStage === 0 ? '#4a2f13' : '#3d260f';
+                ctx.beginPath();
+                ctx.roundRect(bed.x, bed.y, bed.width, bed.height, 4);
+                ctx.fill();
+
+                // Textura de surco
+                ctx.strokeStyle = '#281809';
+                ctx.lineWidth = 1.5;
+                for (let row = bed.y + 4; row < bed.y + bed.height; row += 8) {
+                    ctx.beginPath();
+                    ctx.moveTo(bed.x + 4, row);
+                    ctx.lineTo(bed.x + bed.width - 4, row);
+                    ctx.stroke();
+                }
+
+                // 3. Renderizado de cultivo según etapa
+                if (bed.growthStage > 0) {
+                    dibujarCultivo(bed);
+                }
+
+                // Borde de madera
+                ctx.strokeStyle = '#784820';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(bed.x, bed.y, bed.width, bed.height);
+            });
+        }
+
+        function generarFilasDeCultivos() {
+            let hx = huerta.x;
+            let hy = huerta.y;
+            let hw = huerta.w;
+            let cultivos = [];
+
+            // Fila 1 (yOff = 16): Tomates en tutores de madera
+            for (let x = hx + 18; x < hx + hw - 18; x += 28) {
+                cultivos.push({ tipo: 'tomate', x: x, y: hy + 22 });
+            }
+            // Fila 2 (yOff = 38): Maíz alto con choclos dorados
+            for (let x = hx + 16; x < hx + hw - 16; x += 24) {
+                cultivos.push({ tipo: 'maiz', x: x, y: hy + 44 });
+            }
+            // Fila 3 (yOff = 60): Repollos y lechugas en roseta
+            for (let x = hx + 18; x < hx + hw - 18; x += 26) {
+                cultivos.push({ tipo: 'repollo', x: x, y: hy + 66 });
+            }
+            // Fila 4 (yOff = 82): Calabazas gigantes naranjas
+            for (let x = hx + 22; x < hx + hw - 22; x += 36) {
+                cultivos.push({ tipo: 'calabaza', x: x, y: hy + 88 });
+            }
+            // Fila 5 (yOff = 104): Berenjenas moradas y pimientos
+            for (let x = hx + 18; x < hx + hw - 18; x += 28) {
+                cultivos.push({ tipo: 'berenjena', x: x, y: hy + 110 });
+            }
+            // Fila 6 (yOff = 126): Arbustos de bayas rojas
+            for (let x = hx + 20; x < hx + hw - 20; x += 32) {
+                cultivos.push({ tipo: 'baya', x: x, y: hy + 132 });
+            }
+
+            return cultivos;
+        }
+
+        function dibujarCultivo(bed) {
+            let c = { tipo: bed.cropType, x: bed.x + bed.width/2, y: bed.y + bed.height/2 };
+            ctx.save();
+            ctx.translate(c.x, c.y);
+
+            // Sombra de planta (si el crecimiento es > 1)
+            if (bed.growthStage === 2) {
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                ctx.beginPath(); ctx.ellipse(0, 4, 6, 3, 0, 0, Math.PI * 2); ctx.fill();
+            }
+
+            if (c.tipo === 'tomate') {
+                ctx.fillStyle = '#15803d';
+                ctx.beginPath(); ctx.arc(0, 0, bed.growthStage === 1 ? 4 : 8, 0, Math.PI * 2); ctx.fill();
+                if (bed.growthStage === 2) {
+                    ctx.fillStyle = '#ef4444';
+                    ctx.beginPath(); ctx.arc(-3, 2, 3, 0, Math.PI * 2); ctx.fill();
+                }
+            } else if (c.tipo === 'maiz') {
+                ctx.fillStyle = '#166534'; ctx.fillRect(-2, -10, 4, bed.growthStage === 1 ? 10 : 20);
+                if (bed.growthStage === 2) {
+                    ctx.fillStyle = '#facc15'; ctx.fillRect(2, -8, 4, 8);
+                }
+            } else if (c.tipo === 'repollo') {
+                ctx.fillStyle = bed.growthStage === 1 ? '#4ade80' : '#14532d';
+                ctx.beginPath(); ctx.arc(0, 0, bed.growthStage === 1 ? 5 : 9, 0, Math.PI * 2); ctx.fill();
+            } else if (c.tipo === 'zanahoria') {
+                ctx.fillStyle = '#22c55e'; ctx.fillRect(-2, -8, 4, 8);
+            } else if (c.tipo === 'berenjena') {
+                ctx.fillStyle = '#7e22ce'; ctx.beginPath(); ctx.arc(0, 2, 5, 0, Math.PI * 2); ctx.fill();
+            } else if (c.tipo === 'baya') {
+                ctx.fillStyle = '#f43f5e'; ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+            }
+
+            ctx.restore();
+        }
+
+        // --- RENDERIZADO DE ARBUSTOS PIXEL ART (fac8de95b98a3c115a31ee193d3ee697.jpg) ---
+        function dibujarArbusto(x, y, variante, escala, t) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.scale(escala, escala);
+
+            // Sombra de oclusión ambiental densa y sólida (AAA)
+            let gradOclusion = ctx.createRadialGradient(0, 3, 2, 0, 3, 20);
+            gradOclusion.addColorStop(0, 'rgba(8, 28, 14, 0.65)');
+            gradOclusion.addColorStop(1, 'rgba(10, 32, 16, 0)');
+            ctx.fillStyle = gradOclusion;
+            ctx.beginPath();
+            ctx.ellipse(0, 3, 19, 9, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Parche de integración con el suelo (césped y raíces)
+            ctx.fillStyle = '#0f3314'; // Sombra profunda de contacto
+            ctx.beginPath();
+            ctx.ellipse(0, 1, 15, 5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Briznas que abrazan la base
+            ctx.fillStyle = '#144d27';
+            for(let i=0; i<5; i++) {
+                const bh = 2 + (hash(x + i * 5, y) * 3);
+                ctx.fillRect(-12 + i * 6, -bh + 1, 2, bh);
+            }
+
+            // Paletas de color según variante...
+
+            // Paletas de color según variante: 0/1: Verde Esmeralda, 2/3: Olivo/Dorado, 4/5: Púrpura/Otoño
+            let colOscuro = '#0f3919', colMedio = '#1e662c', colClaro = '#48b859';
+            if (variante === 2 || variante === 3) {
+                colOscuro = '#2b300c'; colMedio = '#566119'; colClaro = '#a1b33b';
+            } else if (variante === 4 || variante === 5) {
+                colOscuro = '#2d142c'; colMedio = '#5c2040'; colClaro = '#9b3b5a';
+            }
+
+            let esConico = (variante % 2 === 1);
+
+            if (!esConico) {
+                // --- ARBUSTO FRONDOSO REDONDO ---
+                ctx.fillStyle = colOscuro;
+                ctx.beginPath(); ctx.arc(-8, -10, 10, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(8, -10, 10, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(0, -14, 12, 0, Math.PI * 2); ctx.fill();
+
+                ctx.fillStyle = colMedio;
+                ctx.beginPath(); ctx.arc(-6, -12, 9, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(6, -12, 9, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(0, -16, 10, 0, Math.PI * 2); ctx.fill();
+
+                ctx.fillStyle = colClaro;
+                ctx.beginPath(); ctx.arc(-3, -18, 5, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(3, -16, 4, 0, Math.PI * 2); ctx.fill();
+            } else {
+                // --- ARBUSTO CÓNICO DE JARDÍN ---
+                ctx.fillStyle = colOscuro;
+                ctx.beginPath();
+                ctx.moveTo(0, -26); ctx.lineTo(-13, -4); ctx.lineTo(13, -4); ctx.closePath();
+                ctx.fill();
+
+                ctx.fillStyle = colMedio;
+                ctx.beginPath();
+                ctx.moveTo(0, -24); ctx.lineTo(-10, -6); ctx.lineTo(10, -6); ctx.closePath();
+                ctx.fill();
+
+                ctx.fillStyle = colClaro;
+                ctx.beginPath();
+                ctx.moveTo(0, -22); ctx.lineTo(-5, -12); ctx.lineTo(5, -12); ctx.closePath();
+                ctx.fill();
+            }
+
+            ctx.restore();
+        }
+
+        // --- DECORACIONES DE SUELO INTEGRADAS (111.jpg, imattges.jpg, imagdes.jpg) ---
+        let detallesSuelo = [];
+        function generarDetallesSuelo() {
+            detallesSuelo = [];
+            let paso = 22;
+
+            for (let y = 40; y < alto - 40; y += paso) {
+                for (let x = 40; x < ancho - 40; x += paso) {
+                    let rx = x + (hash(x, y) - 0.5) * 16;
+                    let ry = y + (hash(y, x) - 0.5) * 16;
+
+                    // Evitar la huerta central
+                    if (rx >= huerta.x - 15 && rx <= huerta.x + huerta.w + 15 &&
+                        ry >= huerta.y - 15 && ry <= huerta.y + huerta.h + 15) {
+                        continue;
+                    }
+
+                    const distX = (rx - centroX) / (radioMaximo * 1.1);
+                    const distY = (ry - centroY) / (radioMaximo * 1.1);
+                    const distancia = Math.sqrt(distX * distX + distY * distY);
+                    
+                    const gradienteCircular = 1.0 - Math.min(distancia, 1.0);
+                    const topografia = ruidoFractal(rx * escalaRuido, ry * escalaRuido, 4);
+                    const elevacion = gradienteCircular * 0.65 + topografia * 0.45;
+
+                    if (elevacion >= 0.47 && elevacion <= 0.72) {
+                        let randVal = hash(rx * 4, ry * 8);
+
+                        if (randVal > 0.88) {
+                            // Diente de león amarillo (111.jpg)
+                            detallesSuelo.push({ tipo: 'diente_leon', x: rx, y: ry, escala: 0.8 + randVal * 0.4 });
+                        } else if (randVal > 0.78) {
+                            // Margarita blanca (111.jpg)
+                            detallesSuelo.push({ tipo: 'margarita', x: rx, y: ry, escala: 0.8 + randVal * 0.4 });
+                        } else if (randVal > 0.55) {
+                            // Penacho de hierba dibujada a mano (imagdes.jpg)
+                            detallesSuelo.push({ tipo: 'penacho_hierba', x: rx, y: ry, escala: 0.85 + randVal * 0.35 });
+                        }
+                    }
+                }
+            }
+        }
+
+        function dibujarDetallesSuelo() {
+            for (let i = 0; i < detallesSuelo.length; i++) {
+                let d = detallesSuelo[i];
+                ctx.save();
+                ctx.translate(d.x, d.y);
+                ctx.scale(d.escala, d.escala);
+
+                if (d.tipo === 'diente_leon') {
+                    // Diente de león amarillo vibrante (111.jpg)
+                    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+                    ctx.beginPath(); ctx.ellipse(1, 2, 4, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+                    ctx.fillStyle = '#facc15';
+                    ctx.beginPath(); ctx.arc(0, 0, 3.8, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#fef08a';
+                    ctx.beginPath(); ctx.arc(-0.8, -0.8, 2, 0, Math.PI * 2); ctx.fill();
+                } else if (d.tipo === 'margarita') {
+                    // Margarita blanca (111.jpg)
+                    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+                    ctx.beginPath(); ctx.ellipse(1, 2, 4, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+                    ctx.fillStyle = '#ffffff';
+                    for (let a = 0; a < 5; a++) {
+                        let ang = (a * Math.PI * 2) / 5;
+                        ctx.fillRect(Math.cos(ang) * 2.5 - 1, Math.sin(ang) * 2.5 - 1, 2.2, 2.2);
+                    }
+                    ctx.fillStyle = '#f59e0b';
+                    ctx.fillRect(-1, -1, 2, 2);
+                } else if (d.tipo === 'penacho_hierba') {
+                    // Penacho de briznas dibujado a mano (imagdes.jpg)
+                    ctx.strokeStyle = '#14532d';
+                    ctx.lineWidth = 1.2;
+
+                    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.quadraticCurveTo(-5, -6, -7, -8); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(-1, 0); ctx.quadraticCurveTo(-2, -8, -3, -11); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(1, 0); ctx.quadraticCurveTo(0, -9, 0, -12); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(2, 0); ctx.quadraticCurveTo(4, -7, 5, -10); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(4, 0); ctx.quadraticCurveTo(6, -5, 8, -7); ctx.stroke();
+
+                    // Brillo en las puntas de las briznas
+                    ctx.strokeStyle = '#4ade80';
+                    ctx.lineWidth = 0.8;
+                    ctx.beginPath(); ctx.moveTo(-1, 0); ctx.quadraticCurveTo(-2, -8, -3, -11); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(1, 0); ctx.quadraticCurveTo(0, -9, 0, -12); ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        // --- RENDERIZADO DE PIEDRAS DE SUELO (imattges.jpg) ---
+        function dibujarPiedrasSuelo() {
+            for (let i = 0; i < piedrasSuelo.length; i++) {
+                let p = piedrasSuelo[i];
+                ctx.save();
+                ctx.translate(p.x, p.y);
+
+                // Sombra de piedra
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                ctx.beginPath(); ctx.ellipse(1, 1.5, p.radioX, p.radioY, 0, 0, Math.PI * 2); ctx.fill();
+
+                // Piedra de río gris
+                ctx.fillStyle = '#64748b';
+                ctx.beginPath(); ctx.ellipse(0, 0, p.radioX, p.radioY, 0, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#94a3b8';
+                ctx.beginPath(); ctx.ellipse(-p.radioX * 0.3, -p.radioY * 0.3, p.radioX * 0.4, p.radioY * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // RENDERIZADO DE ÁRBOLES VECTORIALES
+        // RENDERIZADO DE ÁRBOLES PIXEL ART (Estilo integrado)
+        function dibujarArbolPixelArt(x, y, variante, escala, t) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.scale(escala, escala);
+
+            // Sombra de oclusión ambiental densa (AAA)
+            let gradOclusion = ctx.createRadialGradient(0, 3, 2, 0, 3, 24);
+            gradOclusion.addColorStop(0, 'rgba(8, 28, 14, 0.55)');
+            gradOclusion.addColorStop(1, 'rgba(10, 32, 16, 0)');
+            ctx.fillStyle = gradOclusion;
+            ctx.beginPath();
+            ctx.ellipse(0, 4, 24, 11, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Sombra proyectada del tronco (hora dorada)
+            ctx.fillStyle = 'rgba(8, 24, 12, 0.25)';
+            ctx.beginPath();
+            ctx.moveTo(-2, 2); ctx.lineTo(2, 0); ctx.lineTo(30, 8); ctx.lineTo(26, 12);
+            ctx.closePath(); ctx.fill();
+
+            // Tronco pixelado...
+
+            // Tronco pixelado
+            ctx.fillStyle = '#452a1a';
+            ctx.fillRect(-4, -16, 8, 16);
+            ctx.fillStyle = '#6e4726';
+            ctx.fillRect(-2, -16, 4, 16);
+
+            // Follaje detallado
+            let sway = Math.sin(t * 1.5 + x * 0.05) * 1.5;
+            ctx.translate(sway, -16);
+            
+            if (variante === 0) { // Frondoso (añadido sombreado y reflejos)
+                ctx.fillStyle = '#144d27'; // Sombra
+                ctx.fillRect(-12, -24, 24, 24);
+                ctx.fillStyle = '#1e662c'; // Base
+                ctx.fillRect(-10, -22, 20, 20);
+                ctx.fillStyle = '#48b859'; // Luz
+                ctx.fillRect(-6, -18, 8, 8);
+            } else if (variante === 1) { // Cónico (detallado con niveles)
+                ctx.fillStyle = '#0f4038';
+                ctx.beginPath(); ctx.moveTo(0, -32); ctx.lineTo(-16, 0); ctx.lineTo(16, 0); ctx.closePath(); ctx.fill();
+                ctx.fillStyle = '#166557';
+                ctx.beginPath(); ctx.moveTo(0, -24); ctx.lineTo(-12, 0); ctx.lineTo(12, 0); ctx.closePath(); ctx.fill();
+                ctx.fillStyle = '#229985';
+                ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(-8, 0); ctx.lineTo(8, 0); ctx.closePath(); ctx.fill();
+            } else { // Palmera/Tropical (mejor estructura de frondas y base)
+                ctx.fillStyle = '#452a1a';
+                ctx.fillRect(-2, -6, 4, 24); // Tronco extendido
+                ctx.fillStyle = '#48b859';
+                ctx.fillRect(-16, -10, 32, 6); // Frondas principales
+                ctx.fillStyle = '#1e662c';
+                ctx.fillRect(-12, -12, 24, 2); 
+            }
+
+            ctx.restore(); // Restaurar para dibujar raíces fuera del translate del follaje
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // Raíces pesadas y césped de contacto AAA
+            ctx.fillStyle = '#2b1809'; // Tierra/Raíz
+            ctx.fillRect(-8, 0, 16, 3); 
+            
+            // Parche de césped que envuelve la base
+            ctx.fillStyle = '#0f3314';
+            ctx.beginPath();
+            ctx.ellipse(0, 2, 20, 7, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Briznas individuales dinámicas
+            ctx.fillStyle = '#22662c';
+            for(let i=0; i<6; i++) {
+                const h = 4 + (hash(x + i * 13, y) * 6);
+                ctx.fillRect(-14 + i * 5, -h + 2, 2, h);
+                ctx.fillStyle = '#48b859';
+                ctx.fillRect(-14 + i * 5, -h + 2, 2, 1);
+            }
+            ctx.restore();
+        }
+
+        function dibujarJugador(p, t) {
+            ctx.save();
+            ctx.translate(p.x, p.y);
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+            ctx.beginPath(); ctx.ellipse(0, 3, 11, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+
+            let rebotar = Math.abs(Math.sin(t * 8)) * 3;
+
+            ctx.fillStyle = '#0d9488'; ctx.fillRect(-6, -14 - rebotar, 12, 11);
+            ctx.fillStyle = '#1e293b'; ctx.fillRect(-5, -5 - rebotar, 10, 6);
+            ctx.fillStyle = '#fbcfe8'; ctx.fillRect(-7, -26 - rebotar, 14, 13);
+            ctx.fillStyle = '#0f172a'; ctx.fillRect(-4, -21 - rebotar, 3, 3); ctx.fillRect(2, -21 - rebotar, 3, 3);
+            ctx.fillStyle = '#78350f'; ctx.fillRect(-8, -29 - rebotar, 16, 6); ctx.fillRect(-8, -24 - rebotar, 3, 8); ctx.fillRect(5, -24 - rebotar, 3, 8);
+
+            ctx.restore();
+        }
+
+        let ultimoTiempo = performance.now();
+        let contadorFrames = 0;
+        let temporizadorFps = performance.now();
+
+        // --- BUCLE PRINCIPAL DE RENDERIZADO CON INTEGRACIÓN DE SUELO Y HUERTA ---
+        function dibujar(tiempo) {
+            let ahora = performance.now();
+            let dt = Math.min(0.1, (ahora - ultimoTiempo) * 0.001);
+            ultimoTiempo = ahora;
+            let t = tiempo * 0.001;
+
+            contadorFrames++;
+            if (ahora - temporizadorFps >= 1000) {
+                const fpsEl = document.getElementById('fpsCount');
+                if (fpsEl) fpsEl.innerText = contadorFrames;
+                contadorFrames = 0;
+                temporizadorFps = ahora;
+            }
+
+            actualizarJugador(dt, t);
+
+            if (!floraGenerada) generarFloraYObjetos();
+
+            // 1. TERRENO EN PIXEL BUFFER DIRECTO
+            const imageData = ctx.createImageData(ancho, alto);
+            const data = imageData.data;
+
+            for (let y = 0; y < alto; y++) {
+                let rowOffset = y * ancho * 4;
+                for (let x = 0; x < ancho; x++) {
+                    const index = rowOffset + x * 4;
+
+                    const distX = (x - centroX) / (radioMaximo * 1.1);
+                    const distY = (y - centroY) / (radioMaximo * 1.1);
+                    const distancia = Math.sqrt(distX * distX + distY * distY);
+
+                    const gradienteCircular = 1.0 - Math.min(distancia, 1.0);
+                    const topografia = ruidoFractal(x * escalaRuido, y * escalaRuido, 5, 0.5, 2.0);
+
+                    const elevacion = gradienteCircular * 0.65 + topografia * 0.45;
+
+                    let r = 0, g = 0, b = 0;
+
+                    if (elevacion < 0.34) {
+                        const olas = ruidoFractal((x + t * 24) * escalaRuido * 2.5, (y - t * 16) * escalaRuido * 2.5, 3);
+                        r = Math.floor(14 + olas * 18);
+                        g = Math.floor(75 + olas * 35);
+                        b = Math.floor(145 + olas * 45);
+                    } else if (elevacion >= 0.34 && elevacion < 0.42) {
+                        const espuma = ruidoFractal((x - t * 18) * escalaRuido * 4.5, (y + t * 18) * escalaRuido * 4.5, 3);
+                        if (espuma > 0.58 && elevacion < 0.375) {
+                            r = 230; g = 245; b = 250;
+                        } else {
+                            let prog = (elevacion - 0.34) / 0.08;
+                            r = Math.floor(40 + prog * 150);
+                            g = Math.floor(165 + prog * 40);
+                            b = Math.floor(195 + prog * 20);
+                        }
+                    } else if (elevacion >= 0.42 && elevacion < 0.48) {
+                        const granoArena = hash(x, y) * 16;
+                        r = Math.floor(226 - granoArena);
+                        g = Math.floor(204 - granoArena * 0.85);
+                        b = Math.floor(142 - granoArena * 0.65);
+                        // SUELO VEGETAL AAA - INTEGRACIÓN PROFUNDA Y NATURAL
+                        const factorBlending = smoothstep(0.48, 0.54, elevacion);
+                        const granoArena = hash(x, y) * 16;
+                        const arenaR = 226 - granoArena;
+                        const arenaG = 204 - granoArena * 0.85;
+                        const arenaB = 142 - granoArena * 0.65;
+
+                        let cespedR = 30, cespedG = 140, cespedB = 30;
+
+                        if (cespedBaseData) {
+                            const tx = x % baseW;
+                            const ty = y % baseH;
+                            const idx = (ty * baseW + tx) * 4;
+                            
+                            // Muestreo base
+                            const baseR = cespedBaseData[idx];
+                            const baseG = cespedBaseData[idx + 1];
+                            const baseB = cespedBaseData[idx + 2];
+
+                            // --- CAPA DE PROFUNDIDAD Y MATICES AAA ---
+                            const nViento = Math.sin(x * 0.04 + y * 0.03 + t * 0.5) * 0.1;
+                            const nProfundidad = ruidoFractal(x * 0.06, y * 0.06, 3) + nViento;
+                            const nSombras = ruidoFractal(x * 0.15, y * 0.15, 2);
+                            
+                            // Variación de matiz rica (tonos de bosque profundo)
+                            cespedR = baseR + (nProfundidad - 0.5) * 25;
+                            cespedG = baseG + (nProfundidad - 0.5) * 35;
+                            cespedB = baseB + (nProfundidad - 0.5) * 15;
+
+                            // Oclusión ambiental y profundidad (micro-sombras AAA)
+                            const factorSombra = 0.80 + (nSombras * 0.4);
+                            cespedR *= factorSombra;
+                            cespedG *= factorSombra;
+                            cespedB *= factorSombra;
+
+                            // Brillo especular sutil en las puntas de las briznas (basado en la luminosidad del pixel)
+                            const lum = (baseR + baseG + baseB) / 3;
+                            if (lum > 180) {
+                                const highlight = (lum - 180) * 0.4 * (0.5 + nProfundidad * 0.5);
+                                cespedR += highlight;
+                                cespedG += highlight;
+                                cespedB += highlight;
+                            }
+
+                            // Mezcla con detalle sutil (tierra/clover) si existe
+                            if (cespedDetalleData) {
+                                const nDetail = ruidoFractal(x * 0.05, y * 0.05, 2);
+                                if (nDetail > 0.74) {
+                                    const dtx = x % detailW;
+                                    const dty = y % detailH;
+                                    const didx = (dty * detailW + dtx) * 4;
+                                    const dr = cespedDetalleData[didx];
+                                    const dg = cespedDetalleData[didx + 1];
+                                    const db = cespedDetalleData[didx + 2];
+                                    const blend = (nDetail - 0.74) * 2.8;
+                                    cespedR = lerp(cespedR, dr, Math.min(1, blend));
+                                    cespedG = lerp(cespedG, dg, Math.min(1, blend));
+                                    cespedB = lerp(cespedB, db, Math.min(1, blend));
+                                }
+                            }
+                        } else {
+                            // Fallback procedural refinado
+                            const n1 = ruidoFractal(x * 0.1, y * 0.1, 2);
+                            const granoCesped = hash(x * 3, y * 3) * 14;
+                            const tonoBase = 0.5 + Math.sin(x * 0.02 + y * 0.02) * 0.1;
+                            cespedR = Math.floor(30 + granoCesped * 0.6 + (n1 * 10));
+                            cespedG = Math.floor(130 + tonoBase * 40 + granoCesped * 1.2);
+                            cespedB = Math.floor(30 + granoCesped * 0.4);
+                        }
+
+                        r = Math.floor(lerp(arenaR, cespedR, factorBlending));
+                        g = Math.floor(lerp(arenaG, cespedG, factorBlending));
+                        b = Math.floor(lerp(arenaB, cespedB, factorBlending));
+                    }
+
+                    data[index]     = r;
+                    data[index + 1] = g;
+                    data[index + 2] = b;
+                    data[index + 3] = 255;
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+
+            // 2. DIBUJAR PIEDRAS DE SUELO Y DECORACIONES (111.jpg, imattges.jpg, imagdes.jpg)
+            dibujarPiedrasSuelo();
+            dibujarDetallesSuelo();
+
+            // 3. DIBUJAR BASE DE LA HUERTA
+
+            // 4. COLA DE RENDERIZADO DINÁMICO CON Z-SORTING
+            let colaRender = [];
+
+            // Árboles
+            for (let i = 0; i < arbolesValidos.length; i++) {
+                let a = arbolesValidos[i];
+                colaRender.push({ tipo: 'arbol', sortY: a.y, data: a });
+            }
+
+            // Arbustos
+            for (let i = 0; i < arbustosValidos.length; i++) {
+                let arb = arbustosValidos[i];
+                colaRender.push({ tipo: 'arbusto', sortY: arb.y, data: arb });
+            }
+
+            // Cultivos de la huerta
+            for (let i = 0; i < canterosHuerta.length; i++) {
+                let c = canterosHuerta[i];
+                colaRender.push({ tipo: 'cultivo', sortY: c.y + c.height, data: c });
+            }
+
+            // Jugador
+            colaRender.push({ tipo: 'jugador', sortY: jugador.y, data: jugador });
+
+            // CLASIFICACIÓN ESTRICTA POR COORDENADA Y ASCENDENTE
+            colaRender.sort((a, b) => a.sortY - b.sortY);
+
+            // Renderizar entidades en orden de profundidad
+            for (let i = 0; i < colaRender.length; i++) {
+                let entidad = colaRender[i];
+                if (entidad.tipo === 'arbol') {
+                    dibujarArbolPixelArt(entidad.data.x, entidad.data.y, entidad.data.variante, entidad.data.escala, t);
+                } else if (entidad.tipo === 'arbusto') {
+                    dibujarArbusto(entidad.data.x, entidad.data.y, entidad.data.variante, entidad.data.escala, t);
+                } else if (entidad.tipo === 'cultivo') {
+                    dibujarCultivo(entidad.data);
+                } else if (entidad.tipo === 'jugador') {
+                    dibujarJugador(entidad.data, t);
+                }
+            }
+            
+            // Dibujar huerta (background layer)
+            dibujarHuerta();
+
+            requestAnimationFrame(dibujar);
+        }
+
+        requestAnimationFrame(dibujar);
+    </script>
+</body>
+</html>
